@@ -10,12 +10,18 @@ const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3000;
-const isProduction = process.env.NODE_ENV === 'production';
 const hasDatabase = Boolean(process.env.DATABASE_URL);
+const isProduction = process.env.NODE_ENV === 'production' || Boolean(process.env.RENDER);
+
+// Render runs the app behind a reverse proxy. Trust it so secure session cookies work.
+if (isProduction) {
+  app.set('trust proxy', 1);
+}
 
 app.use(express.json({ limit: '1mb' }));
 app.use((req,res,next)=>{if(req.path.startsWith('/api/'))res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');next();});
 app.use(session({
+  name: 'employee_dashboard.sid',
   secret: process.env.SESSION_SECRET || 'dev-only-change-this-secret',
   resave: false,
   saveUninitialized: false,
@@ -34,12 +40,7 @@ function verifyPassword(password, stored) {
   const derived = crypto.scryptSync(String(password), salt, 64).toString('hex');
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(derived, 'hex'));
 }
-const today = () => new Intl.DateTimeFormat('en-CA', {
-  timeZone: 'Asia/Gaza',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit'
-}).format(new Date());
+const today = () => new Date().toISOString().slice(0, 10);
 const now = () => new Date().toISOString();
 
 let pool = null;
