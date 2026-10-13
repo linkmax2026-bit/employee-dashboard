@@ -246,7 +246,103 @@ app.post('/api/expenses',auth,async(req,res)=>{const employee_id=req.session.use
 app.put('/api/expenses/:id',auth,admin,async(req,res)=>{const id=Number(req.params.id);if(pool){const r=await pool.query('UPDATE expenses SET employee_id=COALESCE($1,employee_id),amount=COALESCE($2,amount),date=COALESCE($3,date),category=COALESCE($4,category),note=COALESCE($5,note),edited_by=$6,edited_at=NOW() WHERE id=$7 RETURNING id,employee_id,amount::float AS amount,date::text,category,note,added_by,created_at,edited_by,edited_at',[req.body.employee_id===undefined?null:Number(req.body.employee_id),req.body.amount===undefined?null:Number(req.body.amount),req.body.date||null,req.body.category||null,req.body.note===undefined?null:req.body.note,req.session.user.username,id]);if(!r.rowCount)return res.status(404).json({error:'المصروف غير موجود'});return res.json(r.rows[0]);}const d=readLocal(),x=d.expenses.find(x=>x.id===id);if(!x)return res.status(404).json({error:'المصروف غير موجود'});if(req.body.employee_id!==undefined)x.employee_id=Number(req.body.employee_id);if(req.body.amount!==undefined)x.amount=Number(req.body.amount);if(req.body.date!==undefined)x.date=req.body.date;if(req.body.category!==undefined)x.category=req.body.category;if(req.body.note!==undefined)x.note=req.body.note;x.edited_by=req.session.user.username;x.edited_at=now();writeLocal(d);res.json(x);});
 app.delete('/api/expenses/:id',auth,admin,async(req,res)=>{if(pool)await pool.query('DELETE FROM expenses WHERE id=$1',[Number(req.params.id)]);else{const d=readLocal();d.expenses=d.expenses.filter(x=>x.id!==Number(req.params.id));writeLocal(d);}res.json({ok:true});});
 
-app.get('/api/report',auth,async(req,res)=>{const month=monthValue(req.query.month);if(pool){const employees=await dbEmployees(req.session.user.role==='admin',req.session.user.employee_id);const result=[];for(const e of employees){const p=(await pool.query("SELECT id,employee_id,amount::float AS amount,date::text,type,note,added_by FROM payments WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,month])).rows;const ex=(await pool.query("SELECT id,employee_id,amount::float AS amount,date::text,category,note,added_by FROM expenses WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,month])).rows;const at=(await pool.query("SELECT id,employee_id,date::text,status,hours::float AS hours,note FROM attendance WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,month])).rows;const received=p.reduce((s,x)=>s+x.amount,0),expense_total=ex.reduce((s,x)=>s+x.amount,0);result.push({...e,received,balance:Number(e.salary)-received,payments:p,expenses:ex,expense_total,attendance:at,days:at.filter(a=>a.status==='حضور').length,absences:at.filter(a=>a.status==='غياب').length,hours:at.reduce((s,a)=>s+Number(a.hours||0),0)});}const allExp=result.flatMap(x=>x.expenses);return res.json({month,employees:result,expenses:allExp});}const d=readLocal(),emps=req.session.user.role==='admin'?d.employees:d.employees.filter(e=>e.id===req.session.user.employee_id);const result=emps.map(e=>{const pays=d.payments.filter(p=>p.employee_id===e.id&&p.date.startsWith(month)),exp=(d.expenses||[]).filter(x=>x.employee_id===e.id&&x.date.startsWith(month)),att=d.attendance.filter(a=>a.employee_id===e.id&&a.date.startsWith(month)),received=pays.reduce((s,p)=>s+p.amount,0),expense_total=exp.reduce((s,x)=>s+x.amount,0);return {...e,received,balance:e.salary-received,payments:pays,expenses:exp,expense_total,attendance:att,days:att.filter(a=>a.status==='حضور').length,absences:att.filter(a=>a.status==='غياب').length,hours:att.reduce((s,a)=>s+(a.hours||0),0)};});res.json({month,employees:result,expenses:result.flatMap(x=>x.expenses)});});
+app.get('/api/report',auth,async(req,res)=>{
+  const month=monthValue(req.query.month);
+  const monthStart=`${month}-01`;
+
+  if(pool){
+    const employees=await dbEmployees(
+      req.session.user.role==='admin',
+      req.session.user.employee_id
+    );
+
+    const result=[];
+
+    for(const e of employees){
+
+      const p=(await pool.query(
+        "SELECT id,employee_id,amount::float AS amount,date::text,type,note,added_by FROM payments WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",
+        [e.id,monthStart]
+      )).rows;
+
+      const ex=(await pool.query(
+        "SELECT id,employee_id,amount::float AS amount,date::text,category,note,added_by FROM expenses WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",
+        [e.id,monthStart]
+      )).rows;
+
+      const at=(await pool.query(
+        "SELECT id,employee_id,date::text,status,hours::float AS hours,note FROM attendance WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",
+        [e.id,monthStart]
+      )).rows;
+
+      const received=p.reduce((s,x)=>s+x.amount,0);
+      const expense_total=ex.reduce((s,x)=>s+x.amount,0);
+
+      result.push({
+        ...e,
+        received,
+        balance:Number(e.salary)-received,
+        payments:p,
+        expenses:ex,
+        expense_total,
+        attendance:at,
+        days:at.filter(a=>a.status==='حضور').length,
+        absences:at.filter(a=>a.status==='غياب').length,
+        hours:at.reduce((s,a)=>s+Number(a.hours||0),0)
+      });
+    }
+
+    const allExp=result.flatMap(x=>x.expenses);
+
+    return res.json({
+      month,
+      employees:result,
+      expenses:allExp
+    });
+  }
+
+  const d=readLocal();
+
+  const emps=req.session.user.role==='admin'
+    ? d.employees
+    : d.employees.filter(e=>e.id===req.session.user.employee_id);
+
+  const result=emps.map(e=>{
+    const pays=d.payments.filter(
+      p=>p.employee_id===e.id&&p.date.startsWith(month)
+    );
+
+    const exp=(d.expenses||[]).filter(
+      x=>x.employee_id===e.id&&x.date.startsWith(month)
+    );
+
+    const att=d.attendance.filter(
+      a=>a.employee_id===e.id&&a.date.startsWith(month)
+    );
+
+    const received=pays.reduce((s,p)=>s+p.amount,0);
+    const expense_total=exp.reduce((s,x)=>s+x.amount,0);
+
+    return {
+      ...e,
+      received,
+      balance:e.salary-received,
+      payments:pays,
+      expenses:exp,
+      expense_total,
+      attendance:att,
+      days:att.filter(a=>a.status==='حضور').length,
+      absences:att.filter(a=>a.status==='غياب').length,
+      hours:att.reduce((s,a)=>s+(a.hours||0),0)
+    };
+  });
+
+  res.json({
+    month,
+    employees:result,
+    expenses:result.flatMap(x=>x.expenses)
+  });
+});
 
 app.get('/api/backup',auth,admin,async(req,res)=>{if(pool){const [users,employees,attendance,payments,expenses]=await Promise.all([pool.query('SELECT id,username,password,role,employee_id FROM users ORDER BY id'),pool.query('SELECT id,name,username,employee_group AS "group",salary::float AS salary FROM employees ORDER BY id'),pool.query('SELECT id,employee_id,date::text,status,hours::float AS hours,note,added_by,created_at FROM attendance ORDER BY id'),pool.query('SELECT id,employee_id,amount::float AS amount,date::text,type,note,added_by,created_at,edited_by,edited_at FROM payments ORDER BY id'),pool.query('SELECT id,employee_id,amount::float AS amount,date::text,category,note,added_by,created_at,edited_by,edited_at FROM expenses ORDER BY id')]);res.setHeader('Content-Type','application/json; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="employee-dashboard-backup.json"');return res.send(JSON.stringify({users:users.rows,employees:employees.rows,attendance:attendance.rows,payments:payments.rows,expenses:expenses.rows,exportedAt:now()},null,2));}res.download(localFile,'employee-dashboard-backup.json');});
 
