@@ -13,15 +13,24 @@ const PORT = process.env.PORT || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 
+if (isProduction) {
+  app.set('trust proxy', 1);
+}
+
 app.use(express.json({ limit: '1mb' }));
 app.use((req,res,next)=>{if(req.path.startsWith('/api/'))res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');next();});
 app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-only-change-this-secret',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'lax', secure: isProduction, maxAge: 1000 * 60 * 60 * 12 }
+  proxy: isProduction,
+  cookie: {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isProduction,
+    maxAge: 1000 * 60 * 60 * 12
+  }
 }));
-
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
   const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
