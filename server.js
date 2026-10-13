@@ -14,6 +14,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 
 app.use(express.json({ limit: '1mb' }));
+app.use((req,res,next)=>{if(req.path.startsWith('/api/'))res.set('Cache-Control','no-store, no-cache, must-revalidate, proxy-revalidate');next();});
 app.use(session({
   secret: process.env.SESSION_SECRET || 'dev-only-change-this-secret',
   resave: false,
@@ -117,26 +118,62 @@ async function initDb() {
       edited_at TIMESTAMPTZ
     );
   `);
-  const { rows } = await pool.query('SELECT COUNT(*)::int AS count FROM employees');
-  if (rows[0].count === 0) {
-    const seed = [
-      ['سالي','sally','المجموعة الأولى',2000],
-      ['هادي','hadi','المجموعة الأولى',2000],
-      ['بدر','badr','المجموعة الثانية',1800],
-      ['رغد','raghad','المجموعة الثانية',1800]
-    ];
-    for (const [name, username, group, salary] of seed) {
-      await pool.query('INSERT INTO employees (name,username,employee_group,salary) VALUES ($1,$2,$3,$4)', [name, username, group, salary]);
-    }
-    const emps = (await pool.query('SELECT id,username FROM employees ORDER BY id')).rows;
-    const users = [
-      ['admin', hashPassword('admin123'), 'admin', null],
-      ['sally', hashPassword('123456'), 'employee', emps.find(x=>x.username==='sally').id],
-      ['hadi', hashPassword('123456'), 'employee', emps.find(x=>x.username==='hadi').id],
-      ['badr', hashPassword('123456'), 'employee', emps.find(x=>x.username==='badr').id],
-      ['raghad', hashPassword('123456'), 'employee', emps.find(x=>x.username==='raghad').id]
-    ];
-    for (const u of users) await pool.query('INSERT INTO users (username,password,role,employee_id) VALUES ($1,$2,$3,$4)', u);
+  // Seed / repair default employees and users
+  const defaultEmployees = [
+    ['سالي', 'sally', 'المجموعة الأولى', 2000],
+    ['هادي', 'hadi', 'المجموعة الأولى', 2000],
+    ['بدر', 'badr', 'المجموعة الثانية', 1800],
+    ['رغد', 'raghad', 'المجموعة الثانية', 1800]
+  ];
+
+  for (const [name, username, group, salary] of defaultEmployees) {
+    await pool.query(
+      `INSERT INTO employees (name, username, employee_group, salary)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (username) DO NOTHING`,
+      [name, username, group, salary]
+    );
+  }
+
+  const emps = (
+    await pool.query(
+      'SELECT id, username FROM employees ORDER BY id'
+    )
+  ).rows;
+
+  const employeeUsers = [
+    ['sally', '123456'],
+    ['hadi', '123456'],
+    ['badr', '123456'],
+    ['raghad', '123456']
+  ];
+
+  // Make sure admin account always exists and has admin123
+  await pool.query(
+    `INSERT INTO users (username, password, role, employee_id)
+     VALUES ($1, $2, 'admin', NULL)
+     ON CONFLICT (username)
+     DO UPDATE SET password = EXCLUDED.password,
+                   role = 'admin',
+                   employee_id = NULL`,
+    ['admin', hashPassword('admin123')]
+  );
+
+  // Make sure employee accounts exist
+  for (const [username, password] of employeeUsers) {
+    const employee = emps.find(x => x.username === username);
+
+    if (!employee) continue;
+
+    await pool.query(
+      `INSERT INTO users (username, password, role, employee_id)
+       VALUES ($1, $2, 'employee', $3)
+       ON CONFLICT (username)
+       DO UPDATE SET password = EXCLUDED.password,
+                     role = 'employee',
+                     employee_id = EXCLUDED.employee_id`,
+      [username, hashPassword(password), employee.id]
+    );
   }
 }
 
@@ -196,11 +233,12 @@ app.put('/api/employees/:id',auth,admin,async(req,res)=>{const id=Number(req.par
 
 app.get('/api/payments',auth,async(req,res)=>{const month=req.query.month;let id=req.query.employee_id?Number(req.query.employee_id):null;if(id&&!canAccess(req,id))return res.status(403).json({error:'ممنوع'});if(!id&&req.session.user.role!=='admin')id=req.session.user.employee_id;if(pool){let q='SELECT id,employee_id,amount::float AS amount,date::text,type,note,added_by,created_at,edited_by,edited_at FROM payments WHERE 1=1';const a=[];if(id){a.push(id);q+=` AND employee_id=$${a.length}`;}if(month){a.push(month);q+=` AND date >= $${a.length}::date AND date < ($${a.length}::date + INTERVAL '1 month')`;}q+=' ORDER BY date DESC,id DESC';return res.json((await pool.query(q,a)).rows);}let rows=readLocal().payments;if(id)rows=rows.filter(x=>x.employee_id===id);if(month)rows=rows.filter(x=>x.date?.startsWith(month));res.json(rows.sort((a,b)=>String(b.date).localeCompare(String(a.date))));});
 app.post('/api/payments',auth,async(req,res)=>{const employee_id=req.session.user.role==='admin'?Number(req.body.employee_id):Number(req.session.user.employee_id),amount=Number(req.body.amount),date=req.body.date||today(),type=req.body.type||'دفعة',note=req.body.note||'';if(!(amount>0))return res.status(400).json({error:'أدخل مبلغاً صحيحاً'});if(pool){const r=await pool.query('INSERT INTO payments(employee_id,amount,date,type,note,added_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,employee_id,amount::float AS amount,date::text,type,note,added_by,created_at',[employee_id,amount,date,type,note,req.session.user.username]);return res.json(r.rows[0]);}const d=readLocal(),row={id:Date.now(),employee_id,amount,date,type,note,added_by:req.session.user.username,created_at:now()};d.payments.push(row);writeLocal(d);res.json(row);});
-app.put('/api/payments/:id',auth,async(req,res)=>{const id=Number(req.params.id);if(pool){const p=(await pool.query('SELECT * FROM payments WHERE id=$1',[id])).rows[0];if(!p)return res.status(404).json({error:'الدفعة غير موجودة'});if(!canAccess(req,p.employee_id))return res.status(403).json({error:'ممنوع'});if(req.session.user.role!=='admin'&&req.body.amount!==undefined)return res.status(403).json({error:'تعديل المبلغ من صلاحية المشرف فقط'});const r=await pool.query('UPDATE payments SET amount=COALESCE($1,amount),date=COALESCE($2,date),type=COALESCE($3,type),note=COALESCE($4,note),edited_by=$5,edited_at=NOW() WHERE id=$6 RETURNING id,employee_id,amount::float AS amount,date::text,type,note,added_by,created_at,edited_by,edited_at',[req.body.amount===undefined?null:Number(req.body.amount),req.body.date||null,req.body.type||null,req.body.note===undefined?null:req.body.note,req.session.user.username,id]);return res.json(r.rows[0]);}const d=readLocal(),p=d.payments.find(x=>x.id===id);if(!p)return res.status(404).json({error:'الدفعة غير موجودة'});if(!canAccess(req,p.employee_id))return res.status(403).json({error:'ممنوع'});if(req.session.user.role!=='admin'&&req.body.amount!==undefined)return res.status(403).json({error:'تعديل المبلغ من صلاحية المشرف فقط'});Object.assign(p,{amount:req.body.amount===undefined?p.amount:Number(req.body.amount),date:req.body.date??p.date,type:req.body.type??p.type,note:req.body.note??p.note,edited_by:req.session.user.username,edited_at:now()});writeLocal(d);res.json(p);});
+app.put('/api/payments/:id',auth,admin,async(req,res)=>{const id=Number(req.params.id);if(pool){const p=(await pool.query('SELECT * FROM payments WHERE id=$1',[id])).rows[0];if(!p)return res.status(404).json({error:'الدفعة غير موجودة'});if(!canAccess(req,p.employee_id))return res.status(403).json({error:'ممنوع'});if(req.session.user.role!=='admin'&&req.body.amount!==undefined)return res.status(403).json({error:'تعديل المبلغ من صلاحية المشرف فقط'});const r=await pool.query('UPDATE payments SET amount=COALESCE($1,amount),date=COALESCE($2,date),type=COALESCE($3,type),note=COALESCE($4,note),edited_by=$5,edited_at=NOW() WHERE id=$6 RETURNING id,employee_id,amount::float AS amount,date::text,type,note,added_by,created_at,edited_by,edited_at',[req.body.amount===undefined?null:Number(req.body.amount),req.body.date||null,req.body.type||null,req.body.note===undefined?null:req.body.note,req.session.user.username,id]);return res.json(r.rows[0]);}const d=readLocal(),p=d.payments.find(x=>x.id===id);if(!p)return res.status(404).json({error:'الدفعة غير موجودة'});if(!canAccess(req,p.employee_id))return res.status(403).json({error:'ممنوع'});if(req.session.user.role!=='admin'&&req.body.amount!==undefined)return res.status(403).json({error:'تعديل المبلغ من صلاحية المشرف فقط'});Object.assign(p,{amount:req.body.amount===undefined?p.amount:Number(req.body.amount),date:req.body.date??p.date,type:req.body.type??p.type,note:req.body.note??p.note,edited_by:req.session.user.username,edited_at:now()});writeLocal(d);res.json(p);});
 app.delete('/api/payments/:id',auth,admin,async(req,res)=>{if(pool){await pool.query('DELETE FROM payments WHERE id=$1',[Number(req.params.id)]);return res.json({ok:true});}const d=readLocal();d.payments=d.payments.filter(x=>x.id!==Number(req.params.id));writeLocal(d);res.json({ok:true});});
 
 app.get('/api/attendance',auth,async(req,res)=>{let id=req.query.employee_id?Number(req.query.employee_id):null;if(id&&!canAccess(req,id))return res.status(403).json({error:'ممنوع'});if(!id&&req.session.user.role!=='admin')id=req.session.user.employee_id;const month=req.query.month;if(pool){let q='SELECT id,employee_id,date::text,status,hours::float AS hours,note,added_by,created_at FROM attendance WHERE 1=1',a=[];if(id){a.push(id);q+=` AND employee_id=$${a.length}`;}if(month){a.push(month);q+=` AND date >= $${a.length}::date AND date < ($${a.length}::date + INTERVAL '1 month')`;}q+=' ORDER BY date DESC,id DESC';return res.json((await pool.query(q,a)).rows);}let rows=readLocal().attendance;if(id)rows=rows.filter(x=>x.employee_id===id);if(month)rows=rows.filter(x=>x.date.startsWith(month));res.json(rows);});
 app.post('/api/attendance',auth,async(req,res)=>{const employee_id=req.session.user.role==='admin'?Number(req.body.employee_id):Number(req.session.user.employee_id),date=req.body.date||today(),status=req.body.status||'حضور',hours=Number(req.body.hours)||0,note=req.body.note||'';if(pool){const r=await pool.query('INSERT INTO attendance(employee_id,date,status,hours,note,added_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,employee_id,date::text,status,hours::float AS hours,note,added_by,created_at',[employee_id,date,status,hours,note,req.session.user.username]);return res.json(r.rows[0]);}const d=readLocal(),row={id:Date.now(),employee_id,date,status,hours,note,added_by:req.session.user.username};d.attendance.push(row);writeLocal(d);res.json(row);});
+app.put('/api/attendance/:id',auth,admin,async(req,res)=>{const id=Number(req.params.id);const employee_id=req.body.employee_id===undefined?null:Number(req.body.employee_id);const date=req.body.date||null;const status=req.body.status||null;const hours=req.body.hours===undefined?null:Number(req.body.hours)||0;const note=req.body.note===undefined?null:req.body.note;if(pool){const r=await pool.query('UPDATE attendance SET employee_id=COALESCE($1,employee_id),date=COALESCE($2,date),status=COALESCE($3,status),hours=COALESCE($4,hours),note=COALESCE($5,note) WHERE id=$6 RETURNING id,employee_id,date::text,status,hours::float AS hours,note,added_by,created_at',[employee_id,date,status,hours,note,id]);if(!r.rowCount)return res.status(404).json({error:'سجل الحضور غير موجود'});return res.json(r.rows[0]);}const d=readLocal(),a=d.attendance.find(x=>x.id===id);if(!a)return res.status(404).json({error:'سجل الحضور غير موجود'});if(req.body.employee_id!==undefined)a.employee_id=Number(req.body.employee_id);if(req.body.date!==undefined)a.date=req.body.date;if(req.body.status!==undefined)a.status=req.body.status;if(req.body.hours!==undefined)a.hours=Number(req.body.hours)||0;if(req.body.note!==undefined)a.note=req.body.note;writeLocal(d);res.json(a);});
 app.delete('/api/attendance/:id',auth,admin,async(req,res)=>{if(pool)await pool.query('DELETE FROM attendance WHERE id=$1',[Number(req.params.id)]);else{const d=readLocal();d.attendance=d.attendance.filter(x=>x.id!==Number(req.params.id));writeLocal(d);}res.json({ok:true});});
 
 app.get('/api/expenses',auth,async(req,res)=>{let id=req.query.employee_id?Number(req.query.employee_id):null;if(id&&!canAccess(req,id))return res.status(403).json({error:'ممنوع'});if(!id&&req.session.user.role!=='admin')id=req.session.user.employee_id;const month=req.query.month;if(pool){let q='SELECT id,employee_id,amount::float AS amount,date::text,category,note,added_by,created_at,edited_by,edited_at FROM expenses WHERE 1=1',a=[];if(id){a.push(id);q+=` AND employee_id=$${a.length}`;}if(month){a.push(month);q+=` AND date >= $${a.length}::date AND date < ($${a.length}::date + INTERVAL '1 month')`;}q+=' ORDER BY date DESC,id DESC';return res.json((await pool.query(q,a)).rows);}let rows=readLocal().expenses||[];if(id)rows=rows.filter(x=>x.employee_id===id);if(month)rows=rows.filter(x=>String(x.date).startsWith(month));res.json(rows.sort((a,b)=>String(b.date).localeCompare(String(a.date))));});
