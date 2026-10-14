@@ -264,64 +264,307 @@ app.delete('/api/expenses/:id',auth,admin,async(req,res)=>{if(pool)await pool.qu
 /* =========================
    INCOMES / REVENUES
 ========================= */
-const incomes=(await pool.query("SELECT id,amount::float AS amount,date::text,category,note,added_by FROM incomes WHERE date >= $1::date AND date < ($1::date + INTERVAL '1 month') ORDER BY date,id",[monthStart])).rows;  const month=req.query.month;
-  if(pool){
-    let q='SELECT id,amount::float AS amount,date::text,category,note,added_by,created_at,edited_by,edited_at FROM incomes WHERE 1=1';
-    const a=[];
-    if(month){a.push(month);q+=` AND date >= ($${a.length} || '-01')::date AND date < (($${a.length} || '-01')::date + INTERVAL '1 month')`;}
-    q+=' ORDER BY date DESC,id DESC';
-    return res.json((await pool.query(q,a)).rows);
-  }
-  const d=readLocal();let rows=d.incomes||[];
-  if(month)rows=rows.filter(x=>String(x.date).startsWith(month));
-  rows.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-  res.json(rows);
-});
-app.post('/api/incomes',auth,admin,async(req,res)=>{
-  const amount=Number(req.body.amount),date=req.body.date||today(),category=String(req.body.category||'عام').trim()||'عام',note=String(req.body.note||'');
-  if(!(amount>0)||!Number.isFinite(amount))return res.status(400).json({error:'أدخل مبلغاً صحيحاً'});
-  if(pool){const r=await pool.query('INSERT INTO incomes(amount,date,category,note,added_by) VALUES($1,$2,$3,$4,$5) RETURNING id,amount::float AS amount,date::text,category,note,added_by,created_at',[amount,date,category,note,req.session.user.username]);return res.json(r.rows[0]);}
-  const d=readLocal();if(!Array.isArray(d.incomes))d.incomes=[];
-  const row={id:Date.now(),amount,date,category,note,added_by:req.session.user.username,created_at:now()};d.incomes.push(row);writeLocal(d);res.json(row);
-});
-app.put('/api/incomes/:id',auth,admin,async(req,res)=>{
-  const id=Number(req.params.id);
-  if(req.body.amount!==undefined&&(!(Number(req.body.amount)>0)||!Number.isFinite(Number(req.body.amount))))return res.status(400).json({error:'أدخل مبلغاً صحيحاً'});
-  if(pool){const r=await pool.query('UPDATE incomes SET amount=COALESCE($1,amount),date=COALESCE($2,date),category=COALESCE($3,category),note=COALESCE($4,note),edited_by=$5,edited_at=NOW() WHERE id=$6 RETURNING id,amount::float AS amount,date::text,category,note,added_by,created_at,edited_by,edited_at',[req.body.amount===undefined?null:Number(req.body.amount),req.body.date||null,req.body.category===undefined?null:(String(req.body.category).trim()||'عام'),req.body.note===undefined?null:String(req.body.note),req.session.user.username,id]);if(!r.rowCount)return res.status(404).json({error:'الإيراد غير موجود'});return res.json(r.rows[0]);}
-  const d=readLocal();if(!Array.isArray(d.incomes))d.incomes=[];const x=d.incomes.find(x=>Number(x.id)===id);if(!x)return res.status(404).json({error:'الإيراد غير موجود'});
-  if(req.body.amount!==undefined)x.amount=Number(req.body.amount);if(req.body.date!==undefined)x.date=req.body.date;if(req.body.category!==undefined)x.category=String(req.body.category).trim()||'عام';if(req.body.note!==undefined)x.note=String(req.body.note);x.edited_by=req.session.user.username;x.edited_at=now();writeLocal(d);res.json(x);
-});
-app.delete('/api/incomes/:id',auth,admin,async(req,res)=>{
-  const id=Number(req.params.id);
-  if(pool){const r=await pool.query('DELETE FROM incomes WHERE id=$1',[id]);if(!r.rowCount)return res.status(404).json({error:'الإيراد غير موجود'});return res.json({ok:true});}
-  const d=readLocal();const before=(d.incomes||[]).length;d.incomes=(d.incomes||[]).filter(x=>Number(x.id)!==id);if(d.incomes.length===before)return res.status(404).json({error:'الإيراد غير موجود'});writeLocal(d);res.json({ok:true});
-});
 
-app.get('',auth,async(req,res)=>{
-  const month=monthValue(req.query.month);
-  const monthStart = `${month}-01`;
-  if(pool){
-    const employees=await dbEmployees(req.session.user.role==='admin',req.session.user.employee_id);
-    const result=[];
-    for(const e of employees){
-      const p=(await pool.query("SELECT id,employee_id,amount::float AS amount,date::text,type,note,added_by FROM payments WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,monthStart])).rows;
-      const ex=(await pool.query("SELECT id,employee_id,amount::float AS amount,date::text,category,note,added_by FROM expenses WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,monthStart])).rows;
-      const at=(await pool.query("SELECT id,employee_id,date::text,status,hours::float AS hours,note FROM attendance WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,monthStart])).rows;
-      const received=p.reduce((sum,x)=>sum+Number(x.amount||0),0),expense_total=ex.reduce((sum,x)=>sum+Number(x.amount||0),0);
-      result.push({...e,received,balance:Number(e.salary)-received,payments:p,expenses:ex,expense_total,attendance:at,days:at.filter(a=>a.status==='حضور').length,absences:at.filter(a=>a.status==='غياب').length,hours:at.reduce((sum,a)=>sum+Number(a.hours||0),0)});
+app.get('/api/incomes', auth, async (req, res) => {
+  try {
+    const month = req.query.month;
+
+    if (pool) {
+      let q = 'SELECT id,amount::float AS amount,date::text,category,note,added_by,created_at,edited_by,edited_at FROM incomes WHERE 1=1';
+      const a = [];
+
+      if (month) {
+        a.push(`${month}-01`);
+        q += ` AND date >= $${a.length}::date AND date < ($${a.length}::date + INTERVAL '1 month')`;
+      }
+
+      q += ' ORDER BY date DESC,id DESC';
+      return res.json((await pool.query(q, a)).rows);
     }
-js
-const incomes=(await pool.query("SELECT id,amount::float AS amount,date::text,category,note,added_by FROM incomes WHERE date >= to_date($1 || '-01','YYYY-MM-DD') AND date < (to_date($1 || '-01','YYYY-MM-DD') + INTERVAL '1 month') ORDER BY date,id",[month])).rows;
- const income_total=incomes.reduce((sum,x)=>sum+Number(x.amount||0),0);
-    const allExp=result.flatMap(x=>x.expenses);
-    return res.json({month,employees:result,expenses:allExp,incomes,income_total});
+
+    const d = readLocal();
+    let rows = d.incomes || [];
+
+    if (month) {
+      rows = rows.filter(x => String(x.date).startsWith(month));
+    }
+
+    rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+    return res.json(rows);
+  } catch (e) {
+    console.error('GET incomes error:', e);
+    res.status(500).json({ error: 'تعذر تحميل الإيرادات' });
   }
-  const d=readLocal(),emps=req.session.user.role==='admin'?d.employees:d.employees.filter(e=>e.id===req.session.user.employee_id);
-  const result=emps.map(e=>{const pays=(d.payments||[]).filter(p=>p.employee_id===e.id&&String(p.date).startsWith(month)),exp=(d.expenses||[]).filter(x=>x.employee_id===e.id&&String(x.date).startsWith(month)),att=(d.attendance||[]).filter(a=>a.employee_id===e.id&&String(a.date).startsWith(month)),received=pays.reduce((sum,p)=>sum+Number(p.amount||0),0),expense_total=exp.reduce((sum,x)=>sum+Number(x.amount||0),0);return {...e,received,balance:Number(e.salary)-received,payments:pays,expenses:exp,expense_total,attendance:att,days:att.filter(a=>a.status==='حضور').length,absences:att.filter(a=>a.status==='غياب').length,hours:att.reduce((sum,a)=>sum+Number(a.hours||0),0)};});
-  const incomes=(d.incomes||[]).filter(x=>String(x.date).startsWith(month));const income_total=incomes.reduce((sum,x)=>sum+Number(x.amount||0),0);
-  res.json({month,employees:result,expenses:result.flatMap(x=>x.expenses),incomes,income_total});
 });
 
+app.post('/api/incomes', auth, admin, async (req, res) => {
+  try {
+    const amount = Number(req.body.amount);
+    const date = req.body.date || today();
+    const category = String(req.body.category || 'عام').trim() || 'عام';
+    const note = String(req.body.note || '');
+
+    if (!(amount > 0) || !Number.isFinite(amount)) {
+      return res.status(400).json({ error: 'أدخل مبلغاً صحيحاً' });
+    }
+
+    if (pool) {
+      const r = await pool.query(
+        'INSERT INTO incomes(amount,date,category,note,added_by) VALUES($1,$2,$3,$4,$5) RETURNING id,amount::float AS amount,date::text,category,note,added_by,created_at',
+        [amount, date, category, note, req.session.user.username]
+      );
+      return res.json(r.rows[0]);
+    }
+
+    const d = readLocal();
+    if (!Array.isArray(d.incomes)) d.incomes = [];
+
+    const row = {
+      id: Date.now(),
+      amount,
+      date,
+      category,
+      note,
+      added_by: req.session.user.username,
+      created_at: now()
+    };
+
+    d.incomes.push(row);
+    writeLocal(d);
+    return res.json(row);
+  } catch (e) {
+    console.error('POST incomes error:', e);
+    res.status(500).json({ error: 'تعذر إضافة الإيراد' });
+  }
+});
+
+app.put('/api/incomes/:id', auth, admin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (
+      req.body.amount !== undefined &&
+      (!(Number(req.body.amount) > 0) ||
+        !Number.isFinite(Number(req.body.amount)))
+    ) {
+      return res.status(400).json({ error: 'أدخل مبلغاً صحيحاً' });
+    }
+
+    if (pool) {
+      const r = await pool.query(
+        'UPDATE incomes SET amount=COALESCE($1,amount),date=COALESCE($2,date),category=COALESCE($3,category),note=COALESCE($4,note),edited_by=$5,edited_at=NOW() WHERE id=$6 RETURNING id,amount::float AS amount,date::text,category,note,added_by,created_at,edited_by,edited_at',
+        [
+          req.body.amount === undefined ? null : Number(req.body.amount),
+          req.body.date || null,
+          req.body.category === undefined
+            ? null
+            : (String(req.body.category).trim() || 'عام'),
+          req.body.note === undefined ? null : String(req.body.note),
+          req.session.user.username,
+          id
+        ]
+      );
+
+      if (!r.rowCount) {
+        return res.status(404).json({ error: 'الإيراد غير موجود' });
+      }
+
+      return res.json(r.rows[0]);
+    }
+
+    const d = readLocal();
+    if (!Array.isArray(d.incomes)) d.incomes = [];
+
+    const x = d.incomes.find(x => Number(x.id) === id);
+
+    if (!x) {
+      return res.status(404).json({ error: 'الإيراد غير موجود' });
+    }
+
+    if (req.body.amount !== undefined) x.amount = Number(req.body.amount);
+    if (req.body.date !== undefined) x.date = req.body.date;
+    if (req.body.category !== undefined) {
+      x.category = String(req.body.category).trim() || 'عام';
+    }
+    if (req.body.note !== undefined) x.note = String(req.body.note);
+
+    x.edited_by = req.session.user.username;
+    x.edited_at = now();
+
+    writeLocal(d);
+    return res.json(x);
+  } catch (e) {
+    console.error('PUT incomes error:', e);
+    res.status(500).json({ error: 'تعذر تعديل الإيراد' });
+  }
+});
+
+app.delete('/api/incomes/:id', auth, admin, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (pool) {
+      const r = await pool.query(
+        'DELETE FROM incomes WHERE id=$1',
+        [id]
+      );
+
+      if (!r.rowCount) {
+        return res.status(404).json({ error: 'الإيراد غير موجود' });
+      }
+
+      return res.json({ ok: true });
+    }
+
+    const d = readLocal();
+    d.incomes = (d.incomes || []).filter(x => Number(x.id) !== id);
+    writeLocal(d);
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE incomes error:', e);
+    res.status(500).json({ error: 'تعذر حذف الإيراد' });
+  }
+});
+
+/* =========================
+   MONTHLY REPORT
+========================= */
+
+app.get('/api/report', auth, async (req, res) => {
+  try {
+    const month = monthValue(req.query.month);
+    const monthStart = `${month}-01`;
+
+    if (pool) {
+      const employees = await dbEmployees(
+        req.session.user.role === 'admin',
+        req.session.user.employee_id
+      );
+
+      const result = [];
+
+      for (const e of employees) {
+        const p = (await pool.query(
+          "SELECT id,employee_id,amount::float AS amount,date::text,type,note,added_by FROM payments WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",
+          [e.id, monthStart]
+        )).rows;
+
+        const ex = (await pool.query(
+          "SELECT id,employee_id,amount::float AS amount,date::text,category,note,added_by FROM expenses WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",
+          [e.id, monthStart]
+        )).rows;
+
+        const at = (await pool.query(
+          "SELECT id,employee_id,date::text,status,hours::float AS hours,note FROM attendance WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",
+          [e.id, monthStart]
+        )).rows;
+
+        const received = p.reduce(
+          (sum, x) => sum + Number(x.amount || 0), 0
+        );
+
+        const expense_total = ex.reduce(
+          (sum, x) => sum + Number(x.amount || 0), 0
+        );
+
+        result.push({
+          ...e,
+          received,
+          balance: Number(e.salary) - received,
+          payments: p,
+          expenses: ex,
+          expense_total,
+          attendance: at,
+          days: at.filter(a => a.status === 'حضور').length,
+          absences: at.filter(a => a.status === 'غياب').length,
+          hours: at.reduce((sum, a) => sum + Number(a.hours || 0), 0)
+        });
+      }
+
+      const incomes = (await pool.query(
+        "SELECT id,amount::float AS amount,date::text,category,note,added_by FROM incomes WHERE date >= $1::date AND date < ($1::date + INTERVAL '1 month') ORDER BY date,id",
+        [monthStart]
+      )).rows;
+
+      const income_total = incomes.reduce(
+        (sum, x) => sum + Number(x.amount || 0), 0
+      );
+
+      const allExp = result.flatMap(x => x.expenses);
+
+      return res.json({
+        month,
+        employees: result,
+        expenses: allExp,
+        incomes,
+        income_total
+      });
+    }
+
+    const d = readLocal();
+
+    const emps = req.session.user.role === 'admin'
+      ? d.employees
+      : d.employees.filter(
+          e => e.id === req.session.user.employee_id
+        );
+
+    const result = emps.map(e => {
+      const pays = (d.payments || []).filter(
+        p => p.employee_id === e.id && String(p.date).startsWith(month)
+      );
+
+      const exp = (d.expenses || []).filter(
+        x => x.employee_id === e.id && String(x.date).startsWith(month)
+      );
+
+      const att = (d.attendance || []).filter(
+        a => a.employee_id === e.id && String(a.date).startsWith(month)
+      );
+
+      const received = pays.reduce(
+        (sum, p) => sum + Number(p.amount || 0), 0
+      );
+
+      const expense_total = exp.reduce(
+        (sum, x) => sum + Number(x.amount || 0), 0
+      );
+
+      return {
+        ...e,
+        received,
+        balance: Number(e.salary) - received,
+        payments: pays,
+        expenses: exp,
+        expense_total,
+        attendance: att,
+        days: att.filter(a => a.status === 'حضور').length,
+        absences: att.filter(a => a.status === 'غياب').length,
+        hours: att.reduce((sum, a) => sum + Number(a.hours || 0), 0)
+      };
+    });
+
+    const incomes = (d.incomes || []).filter(
+      x => String(x.date).startsWith(month)
+    );
+
+    const income_total = incomes.reduce(
+      (sum, x) => sum + Number(x.amount || 0), 0
+    );
+
+    return res.json({
+      month,
+      employees: result,
+      expenses: result.flatMap(x => x.expenses),
+      incomes,
+      income_total
+    });
+  } catch (e) {
+    console.error('Monthly report error:', e);
+    res.status(500).json({ error: 'تعذر تحميل التقرير الشهري' });
+  }
+});
 app.get('/api/backup',auth,admin,async(req,res)=>{
   if(pool){
     const [users,employees,attendance,payments,expenses,incomes]=await Promise.all([
