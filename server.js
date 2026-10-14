@@ -264,8 +264,7 @@ app.delete('/api/expenses/:id',auth,admin,async(req,res)=>{if(pool)await pool.qu
 /* =========================
    INCOMES / REVENUES
 ========================= */
-app.get('/api/incomes',auth,admin,async(req,res)=>{
-  const month=req.query.month;
+const incomes=(await pool.query("SELECT id,amount::float AS amount,date::text,category,note,added_by FROM incomes WHERE date >= $1::date AND date < ($1::date + INTERVAL '1 month') ORDER BY date,id",[monthStart])).rows;  const month=req.query.month;
   if(pool){
     let q='SELECT id,amount::float AS amount,date::text,category,note,added_by,created_at,edited_by,edited_at FROM incomes WHERE 1=1';
     const a=[];
@@ -298,15 +297,16 @@ app.delete('/api/incomes/:id',auth,admin,async(req,res)=>{
   const d=readLocal();const before=(d.incomes||[]).length;d.incomes=(d.incomes||[]).filter(x=>Number(x.id)!==id);if(d.incomes.length===before)return res.status(404).json({error:'الإيراد غير موجود'});writeLocal(d);res.json({ok:true});
 });
 
-app.get('/api/report',auth,async(req,res)=>{
+app.get('',auth,async(req,res)=>{
   const month=monthValue(req.query.month);
+  const monthStart = `${month}-01`;
   if(pool){
     const employees=await dbEmployees(req.session.user.role==='admin',req.session.user.employee_id);
     const result=[];
     for(const e of employees){
-      const p=(await pool.query("SELECT id,employee_id,amount::float AS amount,date::text,type,note,added_by FROM payments WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,month])).rows;
-      const ex=(await pool.query("SELECT id,employee_id,amount::float AS amount,date::text,category,note,added_by FROM expenses WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,month])).rows;
-      const at=(await pool.query("SELECT id,employee_id,date::text,status,hours::float AS hours,note FROM attendance WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,month])).rows;
+      const p=(await pool.query("SELECT id,employee_id,amount::float AS amount,date::text,type,note,added_by FROM payments WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,monthStart])).rows;
+      const ex=(await pool.query("SELECT id,employee_id,amount::float AS amount,date::text,category,note,added_by FROM expenses WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,monthStart])).rows;
+      const at=(await pool.query("SELECT id,employee_id,date::text,status,hours::float AS hours,note FROM attendance WHERE employee_id=$1 AND date >= $2::date AND date < ($2::date + INTERVAL '1 month') ORDER BY date",[e.id,monthStart])).rows;
       const received=p.reduce((sum,x)=>sum+Number(x.amount||0),0),expense_total=ex.reduce((sum,x)=>sum+Number(x.amount||0),0);
       result.push({...e,received,balance:Number(e.salary)-received,payments:p,expenses:ex,expense_total,attendance:at,days:at.filter(a=>a.status==='حضور').length,absences:at.filter(a=>a.status==='غياب').length,hours:at.reduce((sum,a)=>sum+Number(a.hours||0),0)});
     }
