@@ -53,7 +53,7 @@ function hashPassword(password) {
     .scryptSync(String(password), salt, 64)
     .toString('hex');
 
-  return scrypt:${salt}:${hash};
+  return `scrypt:${salt}:${hash}`;
 }
 
 function verifyPassword(password, stored) {
@@ -817,7 +817,7 @@ app.get(
 
       if (id) {
         a.push(id);
-        q +=  AND employee_id=$${a.length};
+        q += ` AND employee_id=$${a.length}`;
       }
 
       /*
