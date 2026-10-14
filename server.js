@@ -312,7 +312,7 @@ app.get('/api/report',auth,async(req,res)=>{
     }
 ```js
 const incomes=(await pool.query("SELECT id,amount::float AS amount,date::text,category,note,added_by FROM incomes WHERE date >= to_date($1 || '-01','YYYY-MM-DD') AND date < (to_date($1 || '-01','YYYY-MM-DD') + INTERVAL '1 month') ORDER BY date,id",[month])).rows;
-```    const income_total=incomes.reduce((sum,x)=>sum+Number(x.amount||0),0);
+ const income_total=incomes.reduce((sum,x)=>sum+Number(x.amount||0),0);
     const allExp=result.flatMap(x=>x.expenses);
     return res.json({month,employees:result,expenses:allExp,incomes,income_total});
   }
