@@ -45,4 +45,16 @@ async function settings(){
 async function changeMyPassword(){const a=$('#cpcurrent').value,b=$('#cpnew').value,c=$('#cpconfirm').value;if(b!==c)return toast('كلمتا السر الجديدتان غير متطابقتين');try{await api('/api/password/change',{method:'POST',body:JSON.stringify({currentPassword:a,newPassword:b})});$('#cpcurrent').value='';$('#cpnew').value='';$('#cpconfirm').value='';toast('تم تغيير كلمة السر بنجاح')}catch(e){toast(e.message)}}
 async function adminResetPassword(id){const v=$('#adminpw'+id).value;if(!v)return toast('اكتب كلمة السر الجديدة');try{await api('/api/admin/password/'+id,{method:'POST',body:JSON.stringify({newPassword:v})});$('#adminpw'+id).value='';toast('تم تغيير كلمة السر بنجاح')}catch(e){toast(e.message)}}
 function downloadBackup(){location.href='/api/backup'}function openModal(){$('#modal').style.display='grid'}function closeModal(){$('#modal').style.display='none'}async function logout(){await api('/api/logout',{method:'POST'});location.reload()}(async()=>{try{const x=await api('/api/me');me=x.user;await start()}catch{}})();
+Object.assign(window, {
+  logout, go, dashboard, account, attendance, myExpenses,
+  employeesPage, expenses, incomes, report, settings,
+  addPayment, savePayment, addAttendance, saveAttendance,
+  editAttendance, saveEditAttendance, deleteAttendance,
+  adminAccount, editEmployee, saveEmployee,
+  editPayment, saveEditPayment, deletePayment,
+  addExpense, saveExpense, editExpense, saveEditExpense, deleteExpense,
+  addIncome, saveIncome, editIncome, saveEditIncome, deleteIncome,
+  changeMyPassword, adminResetPassword, downloadBackup,
+  openModal, closeModal
+});
 </script></body></html>
