@@ -310,8 +310,9 @@ app.get('/api/report',auth,async(req,res)=>{
       const received=p.reduce((sum,x)=>sum+Number(x.amount||0),0),expense_total=ex.reduce((sum,x)=>sum+Number(x.amount||0),0);
       result.push({...e,received,balance:Number(e.salary)-received,payments:p,expenses:ex,expense_total,attendance:at,days:at.filter(a=>a.status==='حضور').length,absences:at.filter(a=>a.status==='غياب').length,hours:at.reduce((sum,a)=>sum+Number(a.hours||0),0)});
     }
-    const incomes=(await pool.query("SELECT id,amount::float AS amount,date::text,category,note,added_by FROM incomes WHERE date >= ($1 || '-01')::date AND date < (($1 || '-01')::date + INTERVAL '1 month') ORDER BY date,id",[month])).rows;
-    const income_total=incomes.reduce((sum,x)=>sum+Number(x.amount||0),0);
+```js
+const incomes=(await pool.query("SELECT id,amount::float AS amount,date::text,category,note,added_by FROM incomes WHERE date >= to_date($1 || '-01','YYYY-MM-DD') AND date < (to_date($1 || '-01','YYYY-MM-DD') + INTERVAL '1 month') ORDER BY date,id",[month])).rows;
+```    const income_total=incomes.reduce((sum,x)=>sum+Number(x.amount||0),0);
     const allExp=result.flatMap(x=>x.expenses);
     return res.json({month,employees:result,expenses:allExp,incomes,income_total});
   }
